@@ -1,0 +1,17 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+
+# Training outputs
+output_dir_distill/
+
+# Experiment trackers
+wandb/
+
+# Editor/OS noise
+.DS_Store
+.vscode/
