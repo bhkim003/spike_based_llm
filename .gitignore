@@ -12,6 +12,8 @@ output_dir_distill/
 # Experiment trackers
 wandb/
 
+ckpt_smamba/
+
 # Editor/OS noise
 .DS_Store
 .vscode/
