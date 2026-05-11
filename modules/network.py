@@ -30,7 +30,7 @@ class SpikingMamba(nn.Module):
 
         # sgc_on=True 로 설정할 블록 인덱스 목록 (기본: 첫/중간/마지막)
         if sgc_indices is None:
-            sgc_indices = [0, n_layer // 2, n_layer - 1]
+            sgc_indices = [0, n_layer // 2 - 1, n_layer - 1]
         sgc_indices = set(sgc_indices)
         self.blocks = nn.ModuleList([
             SpikingMambaBlock(

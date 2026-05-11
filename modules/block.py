@@ -39,13 +39,19 @@ class MultiSpike(nn.Module):
 
     def forward(self, x):
         return _SpikeQuantSTE.apply(x, self.qmin, self.qmax)
+    
+    def __repr__(self):
+        return (f"{self.__class__.__name__}("
+                f"qmin={self.qmin}, qmax={self.qmax})"
+                )
 
 
 class RMSNorm(nn.Module):
     def __init__(self, dim, eps=1e-5):
         super().__init__()
+        self.dim = dim
         self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim))  # (dim,)
+        self.weight = nn.Parameter(torch.ones(self.dim))  # (dim,)
 
     def forward(self, x):
         # x: (..., dim)
@@ -53,19 +59,30 @@ class RMSNorm(nn.Module):
         rstd = torch.rsqrt(x_f.pow(2).mean(dim=-1, keepdim=True) + self.eps)
         y = x_f * rstd * self.weight
         return y.to(dtype=x.dtype)
-
+    
+    def __repr__(self):
+        return (f"{self.__class__.__name__}("
+                f"dim={self.dim}, eps={self.eps})"
+                )
 
 class GatedMLP(nn.Module):
     def __init__(self, dim, hidden_mult=2):
         super().__init__()
-        hidden = int(dim * hidden_mult)
-        self.fc1 = nn.Linear(dim, hidden * 2)   # weight: (2*hidden, D)
-        self.fc2 = nn.Linear(hidden, dim)        # weight: (D, hidden)
+        self.dim = dim
+        self.hidden_mult = hidden_mult
+        hidden = int(self.dim * hidden_mult)
+        self.fc1 = nn.Linear(self.dim, hidden * 2)   # weight: (2*hidden, D)
+        self.fc2 = nn.Linear(hidden, self.dim)        # weight: (D, hidden)
 
     def forward(self, x):
         # x: (B, L, D)
         x, gate = self.fc1(x).chunk(2, dim=-1)  # 각각 (B, L, hidden)
         return self.fc2(x * F.silu(gate))        # (B, L, D)
+
+    def __repr__(self):
+        return (f"{self.__class__.__name__}("
+                f"dim={self.dim}, hidden_mult={self.hidden_mult})"
+                )
 
 
 class SpikingMambaBlock(nn.Module):
@@ -100,15 +117,27 @@ class SpikingMambaBlock(nn.Module):
     ):
         super().__init__()
 
+        self.d_model = d_model
+        self.d_state = d_state
+        self.expand = expand   
+        self.conv1d_kernel = conv1d_kernel
+        self.headdim = headdim
+        self.A_init_range = A_init_range
+        self.dt_min = dt_min
+        self.dt_max = dt_max
+        self.dt_init_floor = dt_init_floor
+        self.mlp_ratio = mlp_ratio
+        self.use_gated_mlp = use_gated_mlp
+        self.spike_qmin = spike_qmin
+        self.spike_qmax = spike_qmax
+        self.proj_bias = proj_bias
+        self.conv_bias = conv_bias
+        self.sgc_on = sgc_on
+
         # ---- shape 기본값 ----
-        self.d_model = d_model          # D
-        self.d_state = d_state          # N
-        self.expand = expand
         self.d_inner = d_model * expand # E = D * expand = H * P
-        self.headdim = headdim          # P
         assert self.d_inner % headdim == 0, "d_model*expand must be divisible by headdim"
         self.nheads = self.d_inner // headdim   # H = E // P
-        self.conv1d_kernel = conv1d_kernel      # K
 
         self.norm1 = RMSNorm(d_model)   # weight: (D,)
 
@@ -117,6 +146,16 @@ class SpikingMambaBlock(nn.Module):
         #          E              E              N          N          H
         self.in_proj = nn.Linear(d_model, proj_out,bias=proj_bias)      # weight: (2E+2N+H, D)
         self.out_proj = nn.Linear(self.d_inner, d_model,bias=proj_bias) # weight: (D, E)
+        # [참고 레포 정렬] SpikingMamba/smamba.py 는 spike 경로의 in_proj/out_proj 와
+        #   smooth(SGC) 경로의 in_proj_f/out_proj_f 를 **별도 파라미터** 로 쓰고 있음.
+        #   이전 코드는 두 경로가 같은 in_proj/out_proj 를 공유해서
+        #   smooth-spike alignment 손실의 의미가 달랐음. 이제 분리해서 동일하게 맞춤.
+        if self.sgc_on:
+            self.in_proj_f  = nn.Linear(d_model, proj_out, bias=proj_bias)        # smooth용 in_proj
+            self.out_proj_f = nn.Linear(self.d_inner, d_model, bias=proj_bias)    # smooth용 out_proj
+        else:
+            self.in_proj_f  = None
+            self.out_proj_f = None
 
         # conv1d: depthwise over [x(E), B(N), C(N)] 채널
         conv_dim = self.d_inner + 2 * d_state   # E + 2N
@@ -165,8 +204,29 @@ class SpikingMambaBlock(nn.Module):
             self.norm2 = None
             self.gated_mlp = None
 
-        self.sgc_on = sgc_on
 
+
+    def __repr__(self):
+        return (f"{self.__class__.__name__}("
+                f"d_model={self.d_model}, "
+                f"d_state={self.d_state}, "
+                f"expand={self.expand}, "
+                f"conv1d_kernel={self.conv1d_kernel}, "
+                f"headdim={self.headdim}, "
+                f"A_init_range={self.A_init_range}, "
+                f"dt_min={self.dt_min}, "
+                f"dt_max={self.dt_max}, "
+                f"dt_init_floor={self.dt_init_floor}, "
+                f"mlp_ratio={self.mlp_ratio}, "
+                f"use_gated_mlp={self.use_gated_mlp}, "
+                f"spike_qmin={self.spike_qmin}, "
+                f"spike_qmax={self.spike_qmax}, "
+                f"proj_bias={self.proj_bias}, "
+                f"conv_bias={self.conv_bias}, "
+                f"sgc_on={self.sgc_on})")
+    
+
+    
     def forward(self, x):
         # x: (B, L, D)
 
@@ -176,8 +236,11 @@ class SpikingMambaBlock(nn.Module):
 
         proj_smooth = None
         if self.sgc_on:
+            # [참고 레포] smooth path:
+            #   1) s1_smooth = tanh(u) * 4   (참고 레포는 4를 하드코딩, 여기선 spike_in.qmax)
+            #   2) 그 결과를 in_proj_f (in_proj 와 분리된 별도 파라미터) 로 투사
             proj_smooth = self.spike_in.qmax * torch.tanh(u)   # (B, L, D)
-            proj_smooth = self.in_proj(proj_smooth)            # (B, L, 2E+2N+H)
+            proj_smooth = self.in_proj_f(proj_smooth)          # (B, L, 2E+2N+H)  ← in_proj_f 사용
 
         s = self.spike_in(u)        # (B, L, D)  spike quantize
         proj = self.in_proj(s)      # (B, L, 2E+2N+H)
@@ -257,8 +320,11 @@ class SpikingMambaBlock(nn.Module):
 
         y_smooth = None
         if self.sgc_on:
+            # [참고 레포] smooth path:
+            #   1) s2_smooth = tanh(y) * 4   (참고 레포는 4를 하드코딩, 여기선 spike_out.qmax)
+            #   2) 그 결과를 out_proj_f (out_proj 와 분리된 별도 파라미터) 로 투사
             y_smooth = self.spike_out.qmax * torch.tanh(y) # (B, L, E)
-            y_smooth = self.out_proj(y_smooth)            # (B, L, D)
+            y_smooth = self.out_proj_f(y_smooth)           # (B, L, D)  ← out_proj_f 사용
         y = self.spike_out(y)               # (B, L, E)
         y = self.out_proj(y)                # (B, L, D)   (논문 식 21 Wout)
         
