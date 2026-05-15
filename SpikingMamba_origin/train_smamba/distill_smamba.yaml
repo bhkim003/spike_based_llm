@@ -1,0 +1,44 @@
+# Model arguments
+model_name_or_path: state-spaces/mamba-130m # or change to your own model path (or model size mamba-1.3b)
+torch_dtype: bfloat16
+decontaminate: true
+# Data training arguments
+# For definitions, see: src/h4/training/config.py
+chat_template: "{% set loop_messages = messages %}{% for message in loop_messages %}{% set content = '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content'] | trim + '<|eot_id|>' %}{% if loop.index0 == 0 %}{% set content = bos_token + content %}{% endif %}{{ content }}{% endfor %}{% if add_generation_prompt %}{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}{% endif %}"
+dataset_mixer:
+  JunxiongWang/sftdatasetv3: 1.0
+dataset_splits:
+- train
+- test
+preprocessing_num_workers: 64
+
+# SFT trainer config
+bf16: true
+do_eval: false
+gradient_accumulation_steps: 1
+gradient_checkpointing: false
+gradient_checkpointing_kwargs:
+  use_reentrant: False
+learning_rate: 1.0e-03
+log_level: info
+logging_steps: 10
+logging_strategy: steps
+lr_scheduler_type: cosine
+max_seq_length: 2048
+max_steps: -1
+num_train_epochs: 1
+output_dir: ./output_dir_distill
+overwrite_output_dir: true
+per_device_eval_batch_size: 4
+per_device_train_batch_size: 4
+push_to_hub: false
+remove_unused_columns: true
+report_to:
+- wandb
+save_strategy: "steps"
+save_steps: 5000
+save_total_limit: 1
+seed: 42
+warmup_ratio: 0.01
+kl_weight: 1.0
+ce_weight: 0.0
